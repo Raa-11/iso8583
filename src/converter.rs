@@ -72,3 +72,8 @@ pub fn hex_to_bitmap_array(hex_string: &str) -> Result<Vec<i64>, Box<dyn std::er
     
     Ok(bit_array)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+}

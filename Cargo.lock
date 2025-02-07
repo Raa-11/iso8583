@@ -94,7 +94,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "iso8583"
+name = "iso_8583_rs"
 version = "0.1.0"
 dependencies = [
  "const-hex",
