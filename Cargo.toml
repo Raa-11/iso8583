@@ -2,6 +2,18 @@
 name = "iso_8583_rs"
 version = "0.1.0"
 edition = "2021"
+authors = ["Raa <contact@senoramadhani.com>"]
+
+
+license = "MIT/Apache-2.0"
+description = "Library to Parse ISO-8583 messages"
+homepage = "https://github.com/Raa-11/iso85833"
+repository = "https://github.com/Raa-11/iso8583"
+documentation = "https://github.com/Raa-11/iso8583/blob/master/README.md"
+keywords = ["iso8583", "encoding", "decoding", "protocol"]
+categories = ["encoding"]
+readme = "README.md"
+include = ["Cargo.toml", "src/**/*.rs", "README.md", "LICENSE-APACHE", "LICENSE-MIT"]
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
