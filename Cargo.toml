@@ -19,3 +19,4 @@ include = ["Cargo.toml", "src/**/*.rs", "README.md", "LICENSE-APACHE", "LICENSE-
 serde = { version = "1.0", features = ["derive"] }
 serde_yml = "0.0.12"
 const-hex = "1.14.0"
+reqwest = "0.12.12"

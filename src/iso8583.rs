@@ -60,7 +60,9 @@ impl IsoStruct {
     }
 
     pub fn add_field(&mut self, field: i64, value: &str) -> Result<(), Box<dyn std::error::Error>> {
-        if field < 2 || field > self.bitmap.len() as i64 {
+        let bitmap_len = self.bitmap.len() as i64;
+
+        if field < 2 || field > bitmap_len {
             return  Err(String::from(format!(
                 "expected field to be between {} and {} found {} instead",
                 2,
