@@ -24,6 +24,17 @@ pub enum LenType {
 
 impl LenType {
     /// Convert the YAML `LenType` text into the enum. `None` if unknown.
+    /// The text is case-sensitive and must be lower case, as written in the spec file.
+    ///
+    /// # Examples
+    /// ```
+    /// use iso_8583_rs::LenType;
+    ///
+    /// assert_eq!(LenType::parse("llvar"), Some(LenType::Llvar));
+    /// assert_eq!(LenType::parse("fixed"), Some(LenType::Fixed));
+    /// assert_eq!(LenType::parse("LLVAR"), None); // case-sensitive
+    /// assert_eq!(LenType::parse("xvar"), None);  // unknown
+    /// ```
     pub fn parse(s: &str) -> Option<Self> {
         match s {
             "fixed" => Some(LenType::Fixed),
@@ -35,6 +46,15 @@ impl LenType {
     }
 
     /// Number of length-prefix digits in front of the field value (0 for fixed).
+    /// # Examples
+    /// ```
+    /// use iso_8583_rs::LenType;
+    ///
+    /// assert_eq!(LenType::Fixed.prefix_len(), 0);
+    /// assert_eq!(LenType::Llvar.prefix_len(), 2);
+    /// assert_eq!(LenType::Lllvar.prefix_len(), 3);
+    /// assert_eq!(LenType::Llllvar.prefix_len(), 4);
+    /// ```
     #[inline]
     pub fn prefix_len(self) -> usize {
         match self {
@@ -67,6 +87,14 @@ impl ContentType {
     ///
     /// Unknown kinds become [`ContentType::Any`] rather than an error, so specs from other
     /// networks with custom kinds still load.
+    /// # Examples
+    /// ```
+    /// use iso_8583_rs::ContentType;
+    ///
+    /// assert_eq!(ContentType::parse("n"), ContentType::Numeric);
+    /// assert_eq!(ContentType::parse("ANS"), ContentType::Printable); // case-insensitive
+    /// assert_eq!(ContentType::parse("b"), ContentType::Any);         // unknown: not checked
+    /// ```
     pub fn parse(s: &str) -> Self {
         match s.to_ascii_lowercase().as_str() {
             "n" => ContentType::Numeric,
@@ -78,6 +106,15 @@ impl ContentType {
     }
 
     /// `true` if every byte of `v` matches this kind.
+    /// # Examples
+    /// ```
+    /// use iso_8583_rs::ContentType;
+    ///
+    /// assert!(ContentType::Numeric.check(b"0123"));
+    /// assert!(!ContentType::Numeric.check(b"01a3"));
+    /// assert!(ContentType::AlphaNumeric.check(b"ATM 01"));
+    /// assert!(ContentType::Any.check(&[0xFF, 0x00])); // never fails
+    /// ```
     #[inline]
     pub fn check(self, v: &[u8]) -> bool {
         match self {
@@ -91,6 +128,21 @@ impl ContentType {
 }
 
 /// Compact definition of one field (8 bytes, `Copy`).
+/// You normally do not build these yourself: they come from
+/// [`CompiledSpec::fields`](CompiledSpec::fields), indexed by field number.
+///
+/// # Examples
+/// ```
+/// use iso_8583_rs::{CompiledSpec, ContentType, LenType};
+///
+/// let spec = CompiledSpec::from_file("spec1987.yml")?;
+/// let pan = spec.fields[2]; // field 2: primary account number
+/// assert!(pan.present);
+/// assert_eq!(pan.len_type, LenType::Llvar);
+/// assert_eq!(pan.content, ContentType::Numeric);
+/// assert_eq!((pan.min_len, pan.max_len), (12, 19));
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub struct FieldDef {
@@ -123,6 +175,21 @@ impl FieldDef {
     ///
     /// # Errors
     /// [`Error::BadLength`] if the length is wrong, [`Error::Invalid`] if a character is invalid.
+    /// # Examples
+    /// ```
+    /// use iso_8583_rs::{CompiledSpec, Error};
+    ///
+    /// let spec = CompiledSpec::from_file("spec1987.yml")?;
+    ///
+    /// let terminal = spec.fields[41]; // fixed length 8, printable ASCII
+    /// assert_eq!(terminal.validate(41, b"TERM0001"), Ok(()));
+    /// assert_eq!(terminal.validate(41, b"TERM1"), Err(Error::BadLength(41)));
+    ///
+    /// let pan = spec.fields[2]; // digits only, 12 to 19 long
+    /// assert_eq!(pan.validate(2, b"4111111111111111"), Ok(()));
+    /// assert_eq!(pan.validate(2, b"41111111111111AB"), Err(Error::Invalid(2)));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     #[inline]
     pub fn validate(&self, n: usize, v: &[u8]) -> Result<(), Error> {
         let len_ok = match self.len_type {
@@ -140,6 +207,23 @@ impl FieldDef {
 }
 
 /// Ready-to-use spec. Build once at startup, then share it (e.g. `&'static` or `Arc`).
+/// A `CompiledSpec` is immutable, so one instance can be shared by every thread (for example
+/// behind an [`Arc`](std::sync::Arc) or a `static`).
+///
+/// # Examples
+/// ```
+/// use std::sync::Arc;
+/// use iso_8583_rs::CompiledSpec;
+///
+/// let spec = Arc::new(CompiledSpec::from_file("spec1987.yml")?);
+///
+/// let worker = {
+///     let spec = Arc::clone(&spec);
+///     std::thread::spawn(move || spec.fields[2].max_len)
+/// };
+/// assert_eq!(worker.join().unwrap(), 19);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 #[derive(Debug, Clone)]
 pub struct CompiledSpec {
     /// Index = field number (0 and 1 unused). Undefined fields have `present == false`.
@@ -157,6 +241,32 @@ impl CompiledSpec {
     /// [`Error::BadSpec`] if a field number is outside 0..=128, `LenType` is unknown,
     /// `MaxLen` exceeds the prefix capacity (e.g. `llvar` > 99), `MinLen > MaxLen`,
     /// or a `fixed` field has `MaxLen` 0.
+    /// # Examples
+    /// ```
+    /// use std::collections::HashMap;
+    /// use iso_8583_rs::specfile::{FieldDescription, Spec};
+    /// use iso_8583_rs::{CompiledSpec, Error};
+    ///
+    /// let field = |len_type: &str, max_len, min_len| FieldDescription {
+    ///     content_type: "n".into(),
+    ///     len_type: len_type.into(),
+    ///     max_len,
+    ///     min_len,
+    ///     label: String::new(),
+    /// };
+    ///
+    /// // A valid spec: field 2 is LLVAR up to 19 digits, field 3 is a fixed 6 digits.
+    /// let spec = Spec {
+    ///     fields: HashMap::from([(2, field("llvar", 19, 12)), (3, field("fixed", 6, 0))]),
+    /// };
+    /// let compiled = CompiledSpec::compile(&spec)?;
+    /// assert!(compiled.fields[3].present);
+    ///
+    /// // A nonsensical definition is rejected up front: LLVAR cannot hold more than 99.
+    /// let bad = Spec { fields: HashMap::from([(2, field("llvar", 100, 0))]) };
+    /// assert_eq!(CompiledSpec::compile(&bad).unwrap_err(), Error::BadSpec(2));
+    /// # Ok::<(), Error>(())
+    /// ```
     pub fn compile(spec: &Spec) -> Result<Self, Error> {
         let mut fields = [FieldDef::EMPTY; 129];
         for (&key, d) in &spec.fields {
@@ -191,6 +301,17 @@ impl CompiledSpec {
     ///
     /// # Errors
     /// The file cannot be read or parsed, or the spec is invalid.
+    /// # Examples
+    /// ```
+    /// use iso_8583_rs::CompiledSpec;
+    ///
+    /// let spec = CompiledSpec::from_file("spec1987.yml")?;
+    /// assert!(spec.fields[41].present);
+    ///
+    /// // A missing file is an error, not a panic.
+    /// assert!(CompiledSpec::from_file("does-not-exist.yml").is_err());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn from_file(filename: &str) -> Result<Self, Box<dyn std::error::Error>> {
         Ok(Self::compile(&spec_from_file(filename)?)?)
     }

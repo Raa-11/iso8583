@@ -7,6 +7,22 @@ use std::fmt;
 /// `Copy` and small (2 bytes), so creating and returning an error never allocates. This matters
 /// because malformed messages from the network can arrive in large volumes.
 /// Field numbers are stored as `u8` (0..=128).
+/// # Examples
+/// ```
+/// use iso_8583_rs::{CompiledSpec, Error, Message};
+///
+/// let spec = CompiledSpec::from_file("spec1987.yml")?;
+///
+/// match Message::parse(&spec, b"0200") {
+///     Err(Error::TooShort) => println!("truncated message"),
+///     Err(e) => println!("rejected: {e}"),
+///     Ok(_) => unreachable!(),
+/// }
+///
+/// // Errors print readably and implement `std::error::Error`.
+/// assert_eq!(Error::BadLength(41).to_string(), "field 41: invalid length");
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {
     /// Message is truncated: data ran out before the MTI, bitmap, or a field was complete.

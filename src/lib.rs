@@ -1,5 +1,19 @@
 //! Fast, zero-copy, zero-allocation ISO 8583 parser and builder driven by a YAML spec.
 //!
+//! ISO 8583 is the message format behind card payments (ATM, POS, switch-to-switch). Every host
+//! defines its own layout, so here the layout is a YAML file: you load it once, then parse and
+//! build messages against it without allocating.
+//!
+//! # How it fits together
+//!
+//! | Step | Type | What it does |
+//! |---|---|---|
+//! | 1 | [`CompiledSpec`] | Reads the YAML spec once at startup and turns it into a flat lookup table. |
+//! | 2 | [`Builder`] | Assembles an outgoing message, validates each field, and writes it to a buffer. |
+//! | 3 | [`Message`] | Parses an incoming message and lets you read its fields without copying. |
+//!
+//! # Quick start
+//!
 //! ```
 //! use iso_8583_rs::{Builder, CompiledSpec, Message};
 //!
@@ -21,6 +35,34 @@
 //! # }
 //! ```
 //!
+//! # Reading fields
+//!
+//! | Method | Returns |
+//! |---|---|
+//! | [`Message::get`] | the raw bytes, `Option<&[u8]>` |
+//! | [`Message::get_str`] | `Option<&str>` |
+//! | [`Message::get_u64`] | `Option<u64>` for numeric fields (amount, STAN, dates) |
+//! | [`Message::get_validated`] | the raw bytes after checking them against the spec |
+//! | [`Message::fields`] | every present field, in field-number order |
+//!
+//! # Strict or lazy parsing
+//!
+//! [`Message::parse`] checks the structure **and** every field's content in a single pass; use
+//! it for input from outside. [`Message::parse_lazy`] checks only the structure and leaves
+//! content checks to [`Message::get_validated`], which suits a router that reads a few fields.
+//! Buffer bounds are checked in both modes, so neither can panic on malformed input.
+//!
+//! # Handling errors
+//!
+//! Every failure is a small `Copy` [`Error`] you can match on. Errors never allocate, and
+//! malformed messages return an error instead of panicking.
+//!
+//! # Limitations
+//!
+//! ASCII encoding only (no BCD/EBCDIC), hex ASCII bitmap, fields 1–128, messages up to 65 535
+//! bytes. See the [README](https://github.com/Raa-11/iso8583#readme) for the full list and
+//! for a usage guide with more examples.
+//!
 //! # Modules
 //!
 //! | Module | Contents |
@@ -32,7 +74,6 @@
 //! | [`charset`] | `n` / `a` / `an` / `ans` character validation (SWAR) |
 //! | [`numeric`] | ASCII digits → `u64` (SWAR) |
 //! | [`error`] | [`Error`] |
-//! | `bitmap`, `length` | internal: hex bitmap and length prefixes |
 //! | [`iso8583`], [`converter`], [`validators`], [`strpad`] | legacy API, kept for compatibility |
 
 #![warn(missing_docs)]

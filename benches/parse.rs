@@ -1,9 +1,10 @@
 //! New API (`Message` / `Builder`) vs the published 0.1.1 (`IsoStruct`) on the same message
 //! (fields 2, 3, 4, 7, 11, 12, 13, 37, 41, 42, 49).
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
+use criterion::{criterion_group, criterion_main, Criterion, Throughput};
 use iso_8583_old::iso8583::new_iso_struct as old_new_iso_struct;
 use iso_8583_rs::{Builder, CompiledSpec, Message};
+use std::hint::black_box;
 
 const SPEC: &str = "spec1987.yml";
 

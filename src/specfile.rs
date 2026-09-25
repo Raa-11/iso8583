@@ -53,6 +53,16 @@ pub struct Spec {
 ///
 /// # Errors
 /// The file cannot be read or the YAML does not match the format.
+/// # Examples
+/// ```
+/// use iso_8583_rs::specfile::spec_from_file;
+///
+/// let spec = spec_from_file("spec1987.yml")?;
+/// let pan = &spec.fields[&2];
+/// assert_eq!(pan.len_type, "llvar");
+/// assert_eq!(pan.max_len, 19);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub fn spec_from_file(filename: &str) -> Result<Spec, Box<dyn std::error::Error>> {
     let content = std::fs::read_to_string(filename)?;
     Ok(Spec {

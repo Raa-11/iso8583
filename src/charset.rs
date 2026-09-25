@@ -31,6 +31,14 @@ fn swar_all(v: &[u8], word_bad: impl Fn(u64) -> u64, byte_ok: impl Fn(u8) -> boo
 }
 
 /// `true` if every byte is a digit `0`–`9` (content type `n`). An empty slice is `true`.
+/// # Examples
+/// ```
+/// use iso_8583_rs::charset::all_digits;
+///
+/// assert!(all_digits(b"000000010000"));
+/// assert!(!all_digits(b"12a4"));
+/// assert!(!all_digits(b"+123")); // signs are not digits
+/// ```
 #[inline]
 pub fn all_digits(v: &[u8]) -> bool {
     // x < 0x30 → x - 0x30 sets the high bit; x > 0x39 → x + 0x46 ≥ 0x80.
@@ -43,6 +51,13 @@ pub fn all_digits(v: &[u8]) -> bool {
 }
 
 /// `true` if every byte is printable ASCII `0x20`–`0x7E` (content type `ans`).
+/// # Examples
+/// ```
+/// use iso_8583_rs::charset::all_printable;
+///
+/// assert!(all_printable(b"ATM-01/JKT"));
+/// assert!(!all_printable(b"line\nbreak")); // control characters are not printable
+/// ```
 #[inline]
 pub fn all_printable(v: &[u8]) -> bool {
     // x < 0x20 → x - 0x20 sets the high bit; x = 0x7F → x + 1 = 0x80.
@@ -80,12 +95,26 @@ const fn class_lut() -> [u8; 256] {
 static CLASS: [u8; 256] = class_lut();
 
 /// `true` if every byte is a letter or space (content type `a`).
+/// # Examples
+/// ```
+/// use iso_8583_rs::charset::all_alpha;
+///
+/// assert!(all_alpha(b"JAKARTA PUSAT"));
+/// assert!(!all_alpha(b"JAKARTA 1"));
+/// ```
 #[inline]
 pub fn all_alpha(v: &[u8]) -> bool {
     v.iter().fold(ALPHA, |acc, &b| acc & CLASS[b as usize]) == ALPHA
 }
 
 /// `true` if every byte is a letter, digit, or space (content type `an`).
+/// # Examples
+/// ```
+/// use iso_8583_rs::charset::all_alphanumeric;
+///
+/// assert!(all_alphanumeric(b"ATM 01"));
+/// assert!(!all_alphanumeric(b"ATM-01")); // '-' is neither a letter nor a digit
+/// ```
 #[inline]
 pub fn all_alphanumeric(v: &[u8]) -> bool {
     v.iter().fold(ALNUM, |acc, &b| acc & CLASS[b as usize]) & ALNUM == ALNUM

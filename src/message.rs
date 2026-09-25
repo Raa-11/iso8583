@@ -13,6 +13,19 @@ use crate::spec::CompiledSpec;
 ///
 /// The trade-off: the input buffer must outlive the `Message`; in return no `String`/`Vec` is
 /// created per field.
+/// # Examples
+/// ```
+/// use iso_8583_rs::{CompiledSpec, Message};
+///
+/// let spec = CompiledSpec::from_file("spec1987.yml")?;
+/// let raw = b"02007020000000810000164111111111111111000000000000010000123456TERM0001011hello world";
+///
+/// let msg = Message::parse(&spec, raw)?;
+/// assert_eq!(&msg.mti, b"0200");
+/// assert_eq!(msg.get_str(41), Some("TERM0001"));
+/// assert_eq!(msg.get_u64(4), Some(10_000));
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 #[derive(Debug, Clone)]
 pub struct Message<'a> {
     /// The original message buffer; every field value points into it.
@@ -35,6 +48,21 @@ impl<'a> Message<'a> {
     /// # Errors
     /// Every structural error from [`parse_lazy`](Self::parse_lazy), plus
     /// [`Error::BadLength`] (shorter than `MinLen`) and [`Error::Invalid`] (wrong characters).
+    /// # Examples
+    /// ```
+    /// use iso_8583_rs::{CompiledSpec, Error, Message};
+    ///
+    /// let spec = CompiledSpec::from_file("spec1987.yml")?;
+    /// let raw = b"02007020000000810000164111111111111111000000000000010000123456TERM0001011hello world";
+    ///
+    /// let msg = Message::parse(&spec, raw)?;
+    /// assert_eq!(&msg.mti, b"0200");
+    /// assert_eq!(msg.get(2), Some(&b"4111111111111111"[..]));
+    ///
+    /// // Truncated input is an error, never a panic.
+    /// assert_eq!(Message::parse(&spec, &raw[..30]).unwrap_err(), Error::TooShort);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn parse(spec: &CompiledSpec, buf: &'a [u8]) -> Result<Self, Error> {
         Self::parse_impl::<true>(spec, buf)
     }
@@ -49,6 +77,23 @@ impl<'a> Message<'a> {
     /// [`Error::TooShort`], [`Error::TooLong`] (> 65535 bytes), [`Error::BadMti`],
     /// [`Error::BadHex`], [`Error::TertiaryUnsupported`], [`Error::UnknownField`],
     /// [`Error::BadLength`] (prefix is not digits or exceeds `MaxLen`), [`Error::TrailingBytes`].
+    /// # Examples
+    /// ```
+    /// use iso_8583_rs::{CompiledSpec, Error, Message};
+    ///
+    /// let spec = CompiledSpec::from_file("spec1987.yml")?;
+    /// // Field 2 (PAN) contains a letter, which is not allowed in an `n` field.
+    /// let raw = b"0200702000000081000016X111111111111111000000000000010000123456TERM0001011hello world";
+    ///
+    /// // `parse` rejects the whole message...
+    /// assert_eq!(Message::parse(&spec, raw).unwrap_err(), Error::Invalid(2));
+    ///
+    /// // ...`parse_lazy` accepts it, and you validate only the fields you read.
+    /// let msg = Message::parse_lazy(&spec, raw)?;
+    /// assert_eq!(msg.get(41), Some(&b"TERM0001"[..]));                  // not checked
+    /// assert_eq!(msg.get_validated(&spec, 2), Err(Error::Invalid(2)));  // checked on demand
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn parse_lazy(spec: &CompiledSpec, buf: &'a [u8]) -> Result<Self, Error> {
         Self::parse_impl::<false>(spec, buf)
     }
@@ -135,6 +180,18 @@ impl<'a> Message<'a> {
     ///
     /// # Errors
     /// The first error found; see [`FieldDef::validate`](crate::FieldDef::validate).
+    /// # Examples
+    /// ```
+    /// use iso_8583_rs::{CompiledSpec, Error, Message};
+    ///
+    /// let spec = CompiledSpec::from_file("spec1987.yml")?;
+    /// let bad = b"0200702000000081000016X111111111111111000000000000010000123456TERM0001011hello world";
+    /// let good = b"02007020000000810000164111111111111111000000000000010000123456TERM0001011hello world";
+    ///
+    /// assert_eq!(Message::parse_lazy(&spec, bad)?.validate(&spec), Err(Error::Invalid(2)));
+    /// assert_eq!(Message::parse_lazy(&spec, good)?.validate(&spec), Ok(()));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn validate(&self, spec: &CompiledSpec) -> Result<(), Error> {
         for (n, v) in self.fields() {
             spec.fields[n].validate(n, v)?;
@@ -144,6 +201,18 @@ impl<'a> Message<'a> {
 
     /// `true` if data field `n` (2..=128) is present. Field 1 is always `false` because it is
     /// a bitmap marker, not data.
+    /// # Examples
+    /// ```
+    /// use iso_8583_rs::{CompiledSpec, Message};
+    ///
+    /// let spec = CompiledSpec::from_file("spec1987.yml")?;
+    /// let msg = Message::parse(&spec, b"02007020000000810000164111111111111111000000000000010000123456TERM0001011hello world")?;
+    ///
+    /// assert!(msg.has(41));
+    /// assert!(!msg.has(39)); // not in this message
+    /// assert!(!msg.has(1));  // bitmap marker, not a data field
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     #[inline]
     pub fn has(&self, n: usize) -> bool {
         (2..=128).contains(&n) && self.bitmap & bit(n) != 0
@@ -153,6 +222,24 @@ impl<'a> Message<'a> {
     ///
     /// O(1): the slot position is computed with `count_ones` (number of fields before `n`),
     /// not by searching.
+    /// The value never includes the length prefix of a variable-length field.
+    ///
+    /// # Examples
+    /// ```
+    /// use iso_8583_rs::{CompiledSpec, Message};
+    ///
+    /// let spec = CompiledSpec::from_file("spec1987.yml")?;
+    /// let msg = Message::parse(&spec, b"02007020000000810000164111111111111111000000000000010000123456TERM0001011hello world")?;
+    ///
+    /// assert_eq!(msg.get(41), Some(&b"TERM0001"[..]));
+    /// assert_eq!(msg.get(48), Some(&b"hello world"[..])); // the "011" prefix is not included
+    /// assert_eq!(msg.get(39), None);                      // absent field
+    ///
+    /// // To keep a value after the input buffer is gone, copy it.
+    /// let terminal: Option<Vec<u8>> = msg.get(41).map(<[u8]>::to_vec);
+    /// assert_eq!(terminal.as_deref(), Some(&b"TERM0001"[..]));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     #[inline]
     pub fn get(&self, n: usize) -> Option<&'a [u8]> {
         if !self.has(n) {
@@ -168,6 +255,18 @@ impl<'a> Message<'a> {
     ///
     /// # Errors
     /// [`Error::BadLength`] or [`Error::Invalid`] if the content does not match the spec.
+    /// # Examples
+    /// ```
+    /// use iso_8583_rs::{CompiledSpec, Error, Message};
+    ///
+    /// let spec = CompiledSpec::from_file("spec1987.yml")?;
+    /// let msg = Message::parse_lazy(&spec, b"0200702000000081000016X111111111111111000000000000010000123456TERM0001011hello world")?;
+    ///
+    /// assert_eq!(msg.get_validated(&spec, 41), Ok(Some(&b"TERM0001"[..])));
+    /// assert_eq!(msg.get_validated(&spec, 39), Ok(None)); // absent is not an error
+    /// assert_eq!(msg.get_validated(&spec, 2), Err(Error::Invalid(2)));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn get_validated(&self, spec: &CompiledSpec, n: usize) -> Result<Option<&'a [u8]>, Error> {
         match self.get(n) {
             Some(v) => spec.fields[n].validate(n, v).map(|_| Some(v)),
@@ -176,6 +275,18 @@ impl<'a> Message<'a> {
     }
 
     /// Field `n` as `&str`. `None` if absent or not valid UTF-8.
+    /// # Examples
+    /// ```
+    /// use iso_8583_rs::{CompiledSpec, Message};
+    ///
+    /// let spec = CompiledSpec::from_file("spec1987.yml")?;
+    /// let msg = Message::parse(&spec, b"02007020000000810000164111111111111111000000000000010000123456TERM0001011hello world")?;
+    ///
+    /// assert_eq!(msg.get_str(41), Some("TERM0001"));
+    /// assert_eq!(msg.get_str(48), Some("hello world"));
+    /// assert_eq!(msg.get_str(39), None);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     #[inline]
     pub fn get_str(&self, n: usize) -> Option<&'a str> {
         std::str::from_utf8(self.get(n)?).ok()
@@ -185,12 +296,40 @@ impl<'a> Message<'a> {
     ///
     /// `None` if absent, not all digits, or longer than 19 digits.
     /// See [`parse_digits_u64`].
+    /// # Examples
+    /// ```
+    /// use iso_8583_rs::{CompiledSpec, Message};
+    ///
+    /// let spec = CompiledSpec::from_file("spec1987.yml")?;
+    /// let msg = Message::parse(&spec, b"02007020000000810000164111111111111111000000000000010000123456TERM0001011hello world")?;
+    ///
+    /// assert_eq!(msg.get_u64(4), Some(10_000));   // amount, in minor units
+    /// assert_eq!(msg.get_u64(11), Some(123_456)); // STAN
+    /// assert_eq!(msg.get_u64(41), None);          // "TERM0001" is not a number
+    /// assert_eq!(msg.get_u64(39), None);          // absent
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     #[inline]
     pub fn get_u64(&self, n: usize) -> Option<u64> {
         parse_digits_u64(self.get(n)?)
     }
 
     /// Every present data field as `(number, value)`, ordered by field number.
+    /// # Examples
+    /// ```
+    /// use iso_8583_rs::{CompiledSpec, Message};
+    ///
+    /// let spec = CompiledSpec::from_file("spec1987.yml")?;
+    /// let msg = Message::parse(&spec, b"02007020000000810000164111111111111111000000000000010000123456TERM0001011hello world")?;
+    ///
+    /// let numbers: Vec<usize> = msg.fields().map(|(n, _)| n).collect();
+    /// assert_eq!(numbers, [2, 3, 4, 11, 41, 48]);
+    ///
+    /// for (field, value) in msg.fields() {
+    ///     println!("{field:>3}: {}", String::from_utf8_lossy(value));
+    /// }
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn fields(&self) -> impl Iterator<Item = (usize, &'a [u8])> + '_ {
         let mut bits = self.bitmap & !B1;
         let mut i = 0;

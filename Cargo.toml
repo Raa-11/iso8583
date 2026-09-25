@@ -1,6 +1,6 @@
 [package]
 name = "iso_8583_rs"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 authors = ["Raa <contact@senoramadhani.my.id>"]
 
@@ -17,10 +17,10 @@ include = ["Cargo.toml", "src/**/*.rs", "README.md", "spec1987.yml", "LICENSE-AP
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
-serde_yml = "0.0.12"
+serde_yml = "0.0.13"
 
 [dev-dependencies]
-criterion = "0.5"
+criterion = "0.8"
 # The published 0.1.1, renamed, as the baseline for the benchmark.
 iso_8583_old = { package = "iso_8583_rs", version = "=0.1.1" }
 
