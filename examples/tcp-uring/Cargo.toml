@@ -1,0 +1,18 @@
+[package]
+name = "iso8583-tcp-uring"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Linux only (io_uring; automatically falls back to epoll if kernel does not support io_uring).
+[dependencies]
+iso_8583_rs = { path = "../.." }
+monoio = { version = "0.2", features = ["sync"] }   # sync: cross-thread wake (shutdown signal)
+local-sync = "0.1"                                   # single-threaded channel & semaphore
+bytes = "1"
+ctrlc = { version = "3", features = ["termination"] } # SIGINT + SIGTERM
+tokio-util = { version = "0.7", default-features = false } # CancellationToken only (runtime-agnostic)
+
+[profile.release]
+lto = "fat"
+codegen-units = 1

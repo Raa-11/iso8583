@@ -1,79 +1,60 @@
-use std::collections::HashMap;
+//! **Legacy API.** Convert a bitmap in bit-array form (`Vec<i64>` of 0/1) ↔ hex.
+//!
+//! Used by [`IsoStruct`](crate::iso8583::IsoStruct). The new API stores the bitmap as a `u128`
+//! (see [`Message::bitmap`](crate::Message::bitmap)).
 
+use crate::bitmap::{HEX_LOWER, HEX_LUT};
+
+/// Convert a bit array (0/1, length a multiple of 8) into lower-case hex, 4 bits per character.
+///
+/// Any non-zero value counts as 1, matching the first version's behaviour.
+///
+/// # Errors
+/// If the array length is not a multiple of 8.
 pub fn bitmap_array_to_hex(arr: &[i64]) -> Result<String, Box<dyn std::error::Error>> {
-    let length = arr.len();
-    if length % 4 != 0 {
-        return Err(String::from("invalid iso8583 bitmap array").into())
+    if !arr.len().is_multiple_of(8) {
+        return Err("invalid iso8583 bitmap array".into());
     }
-    
-    if length / 4 % 2 != 0 {
-        return Err(String::from("invalid iso8583 bitmap array").into())
+    let mut out = String::with_capacity(arr.len() / 4);
+    for nibble in arr.chunks_exact(4) {
+        let v = nibble
+            .iter()
+            .fold(0usize, |acc, &b| (acc << 1) | (b != 0) as usize);
+        out.push(HEX_LOWER[v] as char);
     }
-
-    let mut hex_string = String::new();
-    let mut buf = 0;
-    let mut exp = 3i32;
-    
-    let mut m= HashMap::new();
-    m.insert(0, "0");
-    m.insert(1, "1");
-    m.insert(2, "2");
-    m.insert(3, "3");
-    m.insert(4, "4");
-    m.insert(5, "5");
-    m.insert(6, "6");
-    m.insert(7, "7");
-    m.insert(8, "8");
-    m.insert(9, "9");
-    m.insert(10, "a");
-    m.insert(11, "b");
-    m.insert(12, "c");
-    m.insert(13, "d");
-    m.insert(14, "e");
-    m.insert(15, "f");
-
-    for &bit in arr.iter() {
-        if bit == 0 {
-            exp -= 1;
-        } else {
-            buf += 2f32.powf(exp as f32) as i32;
-            exp -= 1;
-        }
-
-        if exp < 0 {
-            exp = 3;
-            if let Some(&hex_char) = m.get(&buf) {
-                hex_string.push_str(hex_char);
-            }
-            buf = 0;
-        }
-    }
-
-    Ok(hex_string)
+    Ok(out)
 }
 
+/// Convert hex (upper or lower case) into a 0/1 bit array, 4 bits per character.
+///
+/// # Errors
+/// If the hex length is odd or a character is not hex.
 pub fn hex_to_bitmap_array(hex_string: &str) -> Result<Vec<i64>, Box<dyn std::error::Error>> {
-    let mut bit_string = String::new();
-
-    let result = const_hex::decode(hex_string);
-    if result.is_err() {
-        return Err(result.unwrap_err().into())
+    if !hex_string.len().is_multiple_of(2) {
+        return Err("odd hex length".into());
     }
-    let bytes = result.unwrap();
-    for byte in bytes {
-        bit_string.push_str(&format!("{:08b}", byte));
+    let mut bits = Vec::with_capacity(hex_string.len() * 4);
+    for c in hex_string.bytes() {
+        let n = HEX_LUT[c as usize];
+        if n > 0xF {
+            return Err(format!("invalid hex character {:?}", c as char).into());
+        }
+        bits.extend((0..4).rev().map(|i| ((n >> i) & 1) as i64));
     }
-    
-    let bit_array_strings: Vec<_> = bit_string.chars().collect();
-    let mut bit_array= Vec::with_capacity(bit_array_strings.len());
-    for bit in bit_array_strings {
-        bit_array.push(bit.to_digit(10).unwrap() as i64);
-    }
-    
-    Ok(bit_array)
+    Ok(bits)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn roundtrip() {
+        let bits = hex_to_bitmap_array("F23A0000000000FF").unwrap();
+        assert_eq!(bits.len(), 64);
+        assert_eq!(&bits[..8], &[1, 1, 1, 1, 0, 0, 1, 0]);
+        assert_eq!(bitmap_array_to_hex(&bits).unwrap(), "f23a0000000000ff");
+        assert!(hex_to_bitmap_array("0G").is_err());
+        assert!(bitmap_array_to_hex(&[1, 0, 1]).is_err());
+    }
 }

@@ -1,41 +1,61 @@
-use std::collections::HashMap;
-use std::io::Read;
-use serde::{Deserialize, Serialize};
+//! YAML spec file format, exactly as written in the file.
+//!
+//! These types only read the file. For parsing and packing, convert to
+//! [`CompiledSpec`](crate::CompiledSpec) first (once, at startup) so field lookup is an array
+//! access instead of a `HashMap` lookup plus `String` comparison.
+//!
+//! The format is compatible with the original Go spec ([mofax/iso8583](https://github.com/mofax/iso8583)):
+//!
+//! ```yaml
+//! 2:
+//!   ContentType: n        # n | a | an | ans (anything else is not content-checked)
+//!   MaxLen: 19
+//!   MinLen: 1             # optional, default 0
+//!   LenType: llvar        # fixed | llvar | lllvar | llllvar
+//!   Label: Primary Account Number   # optional
+//! ```
 
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+
+/// Definition of one field as written in the YAML file.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct FieldDescription {
+    /// Content kind: `n`, `a`, `an`, `ans`; other values (e.g. `b`, `z`) are not content-checked.
     #[serde(rename = "ContentType")]
     pub content_type: String,
+    /// Maximum length; for `fixed` this is the exact length.
     #[serde(rename = "MaxLen")]
     pub max_len: usize,
-    #[serde(rename = "MinLen")]
+    /// Minimum length for variable fields. Optional (default 0), same as the original Go spec.
+    #[serde(rename = "MinLen", default)]
     pub min_len: usize,
+    /// `fixed`, `llvar`, `lllvar`, or `llllvar`.
     #[serde(rename = "LenType")]
     pub len_type: String,
-    #[serde(rename = "Label")]
+    /// Human-readable field name. Optional.
+    #[serde(rename = "Label", default)]
     pub label: String,
 }
 
+/// Contents of a spec file: field number → definition.
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Spec {
-    pub fields: HashMap<i64, FieldDescription>
+    /// Definition per field number. May contain 0 (MTI), 1 and 65 (bitmaps); those entries are
+    /// ignored when compiling because the parser handles them directly.
+    pub fields: HashMap<i64, FieldDescription>,
 }
 
-impl Spec {
-    fn read_from_file(&mut self, filename: &str) -> Result<(), Box<dyn std::error::Error>> {
-        let mut f = std::fs::File::open(filename)?;
-        let mut content = String::new();
-        f.read_to_string(&mut content)?;
-        self.fields = serde_yml::from_str(&content)?;
-        Ok(())
-    }
-}
-
+/// Read and deserialize a YAML spec file.
+///
+/// Only reads the format; content validation (sane lengths, known `LenType`) is done by
+/// [`CompiledSpec::compile`](crate::CompiledSpec::compile).
+///
+/// # Errors
+/// The file cannot be read or the YAML does not match the format.
 pub fn spec_from_file(filename: &str) -> Result<Spec, Box<dyn std::error::Error>> {
-    let mut s = Spec {
-        fields: HashMap::new(),
-    };
-    s.read_from_file(filename)?;
-    Ok(s)
+    let content = std::fs::read_to_string(filename)?;
+    Ok(Spec {
+        fields: serde_yml::from_str(&content)?,
+    })
 }
-

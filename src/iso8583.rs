@@ -1,259 +1,205 @@
-use std::collections::HashMap;
-use serde::{Deserialize, Serialize};
-use crate::converter::{bitmap_array_to_hex, hex_to_bitmap_array};
-use crate::specfile::{spec_from_file, Spec};
-use crate::strpad::left_pad;
-use crate::validators::mti_validator;
+//! **Legacy API.** [`IsoStruct`]: a message in owned form (`String`, `HashMap`, `Vec<i64>` bitmap).
+//!
+//! Kept so code written against the first version keeps working; it is now built on the new
+//! parser, so it no longer panics on malformed input. For performance use
+//! [`CompiledSpec`] + [`Message`] / [`Builder`](crate::Builder).
 
+use crate::converter::bitmap_array_to_hex;
+use crate::error::Error;
+use crate::message::Message;
+use crate::spec::{CompiledSpec, LenType};
+use crate::specfile::{spec_from_file, Spec};
+use crate::validators::mti_validator;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::fmt::Write;
+
+/// Owned Message Type Indicator, e.g. `"0200"`.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct MtiType {
+    /// The MTI value.
     pub mti: String,
 }
 
 impl MtiType {
+    /// The MTI as `&str`. (The `to_string` name is kept from the first version.)
+    #[allow(
+        clippy::inherent_to_string_shadow_display,
+        clippy::wrong_self_convention
+    )]
     pub fn to_string(&self) -> &str {
         &self.mti
     }
 }
+
+/// Field values: field number → value.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ElementsType {
+    /// Value per field number.
     elements: HashMap<i64, String>,
 }
 
 impl ElementsType {
+    /// Read access to all field values.
     pub fn get_elements(&self) -> &HashMap<i64, String> {
         &self.elements
     }
 }
+
+/// Legacy ISO 8583 message together with its spec.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct IsoStruct {
+    /// Spec as read from YAML (not compiled).
     pub spec: Spec,
+    /// Message MTI.
     pub mti: MtiType,
+    /// Bitmap as an array of 0/1 bits: index 0 = field 1. Length 64 or 128.
     pub bitmap: Vec<i64>,
+    /// Field values.
     pub elements: ElementsType,
 }
 
 impl IsoStruct {
+    /// Build the full message: MTI + hex bitmap (lower case) + fields.
+    ///
+    /// # Errors
+    /// See [`pack_elements`](Self::pack_elements); also if the bitmap length is invalid.
+    #[allow(clippy::inherent_to_string_shadow_display)]
     pub fn to_string(&self) -> Result<String, Box<dyn std::error::Error>> {
-        let mut str = String::new();
-
-        let bitmap_string = bitmap_array_to_hex(&self.bitmap)?;
-        let elements_str = self.pack_elements()?;
-        str.push_str(self.mti.to_string());
-        str.push_str(&bitmap_string);
-        str.push_str(&elements_str);
-        Ok(str)
+        let elements = self.pack_elements()?;
+        let mut out = String::with_capacity(4 + self.bitmap.len() / 4 + elements.len());
+        out.push_str(&self.mti.mti);
+        out.push_str(&bitmap_array_to_hex(&self.bitmap)?);
+        out.push_str(&elements);
+        Ok(out)
     }
 
+    /// Set the MTI after checking it is 4 digits.
+    ///
+    /// # Errors
+    /// If the MTI is not exactly 4 digits.
     pub fn add_mti(&mut self, data: &str) -> Result<(), Box<dyn std::error::Error>> {
-        let mti = MtiType{ mti: data.to_string() };
-        let result = mti_validator(&mti);
-        match result {
-            Ok(_) => {
-                self.mti = mti;
-                Ok(())
-            },
-            Err(e) => {
-                Err(e)
-            }
-        }
-    }
-
-    pub fn add_field(&mut self, field: i64, value: &str) -> Result<(), Box<dyn std::error::Error>> {
-        let bitmap_len = self.bitmap.len() as i64;
-
-        if field < 2 || field > bitmap_len {
-            return  Err(String::from(format!(
-                "expected field to be between {} and {} found {} instead",
-                2,
-                self.bitmap.len(),
-                field
-            )).into());
-        }
-        self.bitmap[(field - 1) as usize] = 1;
-        self.elements.elements.insert(field, String::from(value));
+        let mti = MtiType {
+            mti: data.to_string(),
+        };
+        mti_validator(&mti)?;
+        self.mti = mti;
         Ok(())
     }
 
+    /// Set field `field` and turn on its bit. The value is validated in `to_string`.
+    ///
+    /// # Errors
+    /// If `field` is outside 2..=bitmap length, or is 65 (tertiary bitmap marker).
+    pub fn add_field(&mut self, field: i64, value: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let bitmap_len = self.bitmap.len() as i64;
+        if field < 2 || field > bitmap_len || field == 65 {
+            return Err(format!(
+                "expected field to be between 2 and {} (excluding 65) found {} instead",
+                bitmap_len, field
+            )
+            .into());
+        }
+        self.bitmap[(field - 1) as usize] = 1;
+        self.elements.elements.insert(field, value.to_string());
+        Ok(())
+    }
+
+    /// Parse message `i` using `self`'s spec, returning a new `IsoStruct`.
+    ///
+    /// Performance note: the spec is compiled and cloned on every call (legacy behaviour).
+    /// Fast path: build a `CompiledSpec` once and use `Message::parse`.
+    ///
+    /// # Errors
+    /// Every error from [`Message::parse_lazy`](crate::Message::parse_lazy), an invalid spec,
+    /// or a field that is not UTF-8.
     pub fn parse(&self, i: &str) -> Result<IsoStruct, Box<dyn std::error::Error>> {
-        let mut q = IsoStruct{
-            spec: Spec { fields: HashMap::new() },
-            mti: MtiType { mti: String::new() },
-            bitmap: Vec::new(),
-            elements: ElementsType { elements: HashMap::new() },
-        };
-        
-        let (mti, rest) = extract_mti(i);
-        
-        let result = extract_bitmap(rest);
-        if result.is_err() {
-            return Err(result.err().unwrap());
+        let spec = CompiledSpec::compile(&self.spec)?;
+        let msg = Message::parse_lazy(&spec, i.as_bytes())?;
+
+        let width = if msg.bitmap >> 127 == 1 { 128 } else { 64 };
+        let bitmap = (0..width)
+            .map(|k| ((msg.bitmap >> (127 - k)) & 1) as i64)
+            .collect();
+        let mut elements = HashMap::new();
+        for (n, v) in msg.fields() {
+            elements.insert(n as i64, std::str::from_utf8(v)?.to_string());
         }
-        let (bitmap, element_string) = result.unwrap();
-        
-        let result2 = mti_validator(&mti);
-        if result2.is_err() {
-            return Err(result2.err().unwrap());
-        }
-        
-        let result3 = unpack_elements(&bitmap, &element_string, &self.spec);
-        if result3.is_err() {
-            return Err(result3.err().unwrap());
-        }
-        let elements = result3?;
-        
-        q.spec = self.spec.clone();
-        q.mti = mti;
-        q.bitmap = bitmap;
-        q.elements = elements;
-        
-        Ok(q)
+
+        Ok(IsoStruct {
+            spec: self.spec.clone(),
+            mti: MtiType {
+                mti: i[..4].to_string(),
+            }, // safe: parse_lazy already checked 4 ASCII digits
+            bitmap,
+            elements: ElementsType { elements },
+        })
     }
 
+    /// Build the field section only (no MTI or bitmap), in field-number order.
+    ///
+    /// Each value's length is checked against the spec, because a wrong length produces a
+    /// corrupt message on the receiving side.
+    ///
+    /// # Errors
+    /// Field 65 is set, a field is not in the spec, a bit is set with no value, `LenType` is
+    /// unknown, or a value's length does not match the spec.
     pub fn pack_elements(&self) -> Result<String, Box<dyn std::error::Error>> {
-        let mut str= String::new();
-        let bitmap = &self.bitmap;
-        let elements_map = self.elements.get_elements();
-        let elements_spec = &self.spec;
-        
-        for index in 1..bitmap.len() {
-            if bitmap[index] == 1 {
-                let field = (index + 1) as i64;
-                let field_description = &elements_spec.fields[&field];
-                if field_description.len_type == "fixed" {
-                    str.push_str(elements_map.get(&field).unwrap());
-                } else {
-                    let length_type = get_variable_length_from_string(&field_description.len_type);
-                    if length_type.is_err() {
-                        return Err(length_type.err().unwrap());
-                    }
-                    let actual_length = elements_map.get(&field).unwrap().len();
-                    let padded_length = left_pad(&actual_length.to_string(), length_type?, "0");
-                    str.push_str(&padded_length);
-                    str.push_str(&elements_map.get(&field).unwrap());
-                }
+        let mut out = String::new();
+        for (index, &b) in self.bitmap.iter().enumerate().skip(1) {
+            if b != 1 {
+                continue;
             }
-        }
-        
-        Ok(str)
-    }
-}
-
-fn extract_mti(s: &str) -> (MtiType, &str) {
-    let mti = s[..4].to_string();
-    let rest = &s[4..];
-
-    (MtiType{ mti: mti.to_string() }, rest)
-}
-
-fn extract_bitmap(rest: &str) -> Result<(Vec<i64>, String), Box<dyn std::error::Error>> {
-    let front_hex = &rest[0..2];
-    let in_dec = u8::from_str_radix(front_hex, 16);
-    if let Err(e) = in_dec {
-        return Err(e.into())
-    }
-
-    let in_binary = format!("{:08b}", in_dec.unwrap());
-    let compare = "1";
-    let bitmap_hex_length: i64;
-
-    if in_binary.chars().next().unwrap() == compare.chars().next().unwrap() {
-        bitmap_hex_length = 32;
-    } else {
-        bitmap_hex_length = 16;
-    }
-
-    let bitmap_hex_string = &rest[0..bitmap_hex_length as usize];
-    let element_string = rest[bitmap_hex_length as usize..].to_string();
-
-    let result= hex_to_bitmap_array(bitmap_hex_string);
-    match result {
-        Ok(bitmap) => {
-            Ok((bitmap, element_string))
-        }
-        Err(e) => {Err(e.into())}
-    }
-}
-
-fn get_variable_length_from_string(str: &str) -> Result<usize, Box<dyn std::error::Error>> {
-    let num: i64;
-    match str {
-        "llvar" => Ok(2),
-        "lllvar" => Ok(3),
-        "llllvar" => Ok(4),
-        _ => Err(String::from(format!("{} is an invalid LenType", str)).into()),
-    }
-}
-
-fn extract_field_from_elements(spec: &Spec, field: i64, str :&str) -> Result<(String, String), Box<dyn std::error::Error>> {
-    let field_description = &spec.fields[&field];
-
-    let (extracted_field, substr) = if field_description.len_type == "fixed" {
-        let extracted_field = str[0..field_description.max_len].to_string();
-        let substr = str[field_description.max_len..].to_string();
-        (extracted_field, substr)
-    } else {
-        let length = get_variable_length_from_string(field_description.len_type.as_str())?;
-        let field_length = &str[0..length];
-        let temp_substr = &str[length..];
-        let field_length_int: usize = field_length.parse()?;
-
-        let extracted_field = temp_substr[0..field_length_int].to_string();
-        let substr = temp_substr[field_length_int..].to_string();
-        (extracted_field, substr)
-    };
-
-    Ok((extracted_field, substr))
-}
-
-fn unpack_elements(bitmap: &[i64], elements: &str, spec: &Spec) -> Result<ElementsType, Box<dyn std::error::Error>> {
-    let mut m = HashMap::new();
-    let mut current_string = elements.to_string();
-    
-    for index in 1..bitmap.len() {
-        let bit = bitmap[index];
-        if bit == 1 {
             let field = (index + 1) as i64;
-            let result = extract_field_from_elements(spec, field, &current_string);
-            if result.is_err() {
-                return Err(result.err().unwrap());
+            if field == 65 {
+                return Err(Error::TertiaryUnsupported.into());
             }
-            let (extracted_field, substr) = result?;
-            m.insert(field, extracted_field);
-            current_string = substr;
+            let n = field.min(255) as u8;
+            let desc = self.spec.fields.get(&field).ok_or(Error::UnknownField(n))?;
+            let value = self
+                .elements
+                .elements
+                .get(&field)
+                .ok_or(Error::Invalid(n))?;
+            let len_type = LenType::parse(&desc.len_type).ok_or(Error::BadSpec(n))?;
+            let p = len_type.prefix_len();
+            let ok = if p == 0 {
+                value.len() == desc.max_len
+            } else {
+                value.len() <= desc.max_len && value.len() < 10usize.pow(p as u32)
+            };
+            if !ok {
+                return Err(Error::BadLength(n).into());
+            }
+            if p > 0 {
+                write!(out, "{:0width$}", value.len(), width = p)?;
+            }
+            out.push_str(value);
         }
+        Ok(out)
     }
-
-    let elem = ElementsType{elements: m};
-    Ok(elem)
 }
 
-pub fn new_iso_struct(filename: &str, secondary_bitmap: bool) -> Result<IsoStruct, Box<dyn std::error::Error>> {
-    let mut bitmap : Vec<i64>;
-    let mti = MtiType{ mti: String::new() };
-    
+/// Create an empty `IsoStruct` using the spec in file `filename`.
+///
+/// `secondary_bitmap = true` prepares a 128-bit bitmap (fields 65–128 usable) and sets bit 1.
+///
+/// # Errors
+/// The spec file cannot be read or parsed.
+pub fn new_iso_struct(
+    filename: &str,
+    secondary_bitmap: bool,
+) -> Result<IsoStruct, Box<dyn std::error::Error>> {
+    let mut bitmap = vec![0; if secondary_bitmap { 128 } else { 64 }];
     if secondary_bitmap {
-        bitmap = vec![0; 128];
         bitmap[0] = 1;
-    } else {
-        bitmap = vec![0; 64];
     }
-    
-    let emap: HashMap<i64, String> = HashMap::new();
-    let elements = ElementsType{elements: emap};
-    let result = spec_from_file(filename);
-    if result.is_err() {
-        return Err(result.err().unwrap());
-    }
-    let spec = result.unwrap();
-    let iso = IsoStruct { spec, mti, bitmap, elements };
-    Ok(iso)
+    Ok(IsoStruct {
+        spec: spec_from_file(filename)?,
+        mti: MtiType { mti: String::new() },
+        bitmap,
+        elements: ElementsType {
+            elements: HashMap::new(),
+        },
+    })
 }
-
-
-
-
-
-
-
-

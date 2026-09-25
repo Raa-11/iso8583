@@ -1,22 +1,37 @@
 [package]
 name = "iso_8583_rs"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2021"
-authors = ["Raa <contact@senoramadhani.com>"]
+authors = ["Raa <contact@senoramadhani.my.id>"]
 
 
-license = "MIT/Apache-2.0"
-description = "Library to Parse ISO-8583 messages"
-homepage = "https://github.com/Raa-11/iso85833"
+license = "MIT OR Apache-2.0"
+description = "Fast zero-copy, zero-allocation ISO 8583 parser and builder driven by a YAML spec"
+homepage = "https://github.com/Raa-11/iso8583"
 repository = "https://github.com/Raa-11/iso8583"
-documentation = "https://github.com/Raa-11/iso8583/blob/master/README.md"
+documentation = "https://docs.rs/iso_8583_rs"
 keywords = ["iso8583", "encoding", "decoding", "protocol"]
 categories = ["encoding"]
 readme = "README.md"
-include = ["Cargo.toml", "src/**/*.rs", "README.md", "LICENSE-APACHE", "LICENSE-MIT"]
+include = ["Cargo.toml", "src/**/*.rs", "README.md", "spec1987.yml", "LICENSE-APACHE", "LICENSE-MIT"]
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
 serde_yml = "0.0.12"
-const-hex = "1.14.0"
-reqwest = "0.12.12"
+
+[dev-dependencies]
+criterion = "0.5"
+# The published 0.1.1, renamed, as the baseline for the benchmark.
+iso_8583_old = { package = "iso_8583_rs", version = "=0.1.1" }
+
+[[bench]]
+name = "parse"
+harness = false
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+
+[profile.bench]
+inherits = "release"
