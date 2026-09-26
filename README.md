@@ -53,7 +53,7 @@ Pack                          102 ns               3 560 ns          ~35×
 | **Strict or lazy parsing** | Validate everything in one pass, or only the structure and validate fields as you read them. |
 | **Typed errors** | A small `Copy` enum, no allocation on the error path, and no panics on bad input. |
 | **Fast numbers** | `get_u64` reads amounts, STANs, and dates 8 digits at a time. |
-| **Small** | No `unsafe`, two dependencies (`serde`, `serde_yml`). |
+| **Small** | No `unsafe`, two dependencies (`serde`, `serde-saphyr`), both pure Rust. |
 
 ## Installation
 

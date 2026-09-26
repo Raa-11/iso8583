@@ -66,6 +66,6 @@ pub struct Spec {
 pub fn spec_from_file(filename: &str) -> Result<Spec, Box<dyn std::error::Error>> {
     let content = std::fs::read_to_string(filename)?;
     Ok(Spec {
-        fields: serde_yml::from_str(&content)?,
+        fields: serde_saphyr::from_str(&content)?,
     })
 }

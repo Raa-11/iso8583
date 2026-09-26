@@ -329,7 +329,7 @@ mod tests {
 1:\n  ContentType: \"b\"\n  Label: Bitmap\n  LenType: fixed\n  MaxLen: 8\n\
 3:\n  ContentType: \"n\"\n  Label: Processing code\n  LenType: fixed\n  MaxLen: 6\n";
         let spec = Spec {
-            fields: serde_yml::from_str(yml).unwrap(),
+            fields: serde_saphyr::from_str(yml).unwrap(),
         };
         let c = CompiledSpec::compile(&spec).unwrap();
         assert!(!c.fields[0].present && !c.fields[1].present);
@@ -347,7 +347,7 @@ mod tests {
         ];
         for yml in bad {
             let spec = Spec {
-                fields: serde_yml::from_str(yml).unwrap(),
+                fields: serde_saphyr::from_str(yml).unwrap(),
             };
             assert!(
                 matches!(CompiledSpec::compile(&spec), Err(Error::BadSpec(_))),
